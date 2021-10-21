@@ -1,0 +1,19 @@
+{
+  "config": {
+    "activation_function": "tanh",
+    "bias": true,
+    "head_type": "classification",
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "layers": 1,
+    "num_labels": 2,
+    "use_pooler": true
+  },
+  "hidden_size": 768,
+  "model_class": "BertModelWithHeads",
+  "model_name": null,
+  "model_type": "bert",
+  "name": "qnli"
+}

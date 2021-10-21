@@ -1,0 +1,24 @@
+{
+  "config": {
+    "adapter_residual_before_ln": true,
+    "cross_adapter": false,
+    "inv_adapter": null,
+    "inv_adapter_reduction_factor": null,
+    "leave_out": [],
+    "ln_after": false,
+    "ln_before": false,
+    "mh_adapter": true,
+    "non_linearity": "gelu_orig",
+    "original_ln_after": true,
+    "original_ln_before": false,
+    "output_adapter": true,
+    "reduction_factor": 6,
+    "residual_before_ln": true
+  },
+  "config_id": "49531d02f4cd3e2e",
+  "hidden_size": 768,
+  "model_class": "BertModelWithHeads",
+  "model_name": null,
+  "model_type": "bert",
+  "name": "mrpc"
+}

@@ -1,0 +1,6 @@
+runs/
+training_output/
+dataset/
+.ipynb_checkpoints/
+__MACOSX/
+adapter-transformers/
