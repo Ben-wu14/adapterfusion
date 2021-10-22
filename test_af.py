@@ -2,6 +2,7 @@ from datasets import load_from_disk, load_metric
 from transformers import AutoTokenizer, AutoModelWithHeads, TrainingArguments, Trainer, EvalPrediction
 from transformers.adapters.composition import Fuse
 from collections import defaultdict
+from tqdm import tqdm
 import numpy as np
 import torch
 import pickle
@@ -252,6 +253,11 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     eval_result = trainer.evaluate()
     print(eval_result)
 
+    dataiter = iter(trainer.get_train_dataloader())
+    with torch.no_grad():
+        for data_item in tqdm(dataiter):
+            model(data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
+
 
     result_path = './results/'
     result_path += 'AF/' if is_af else 'ST-A/'
@@ -278,6 +284,7 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
         print()
         scores = v['importance'].mean(dim=-1).numpy()
+        v['importance'] = scores
         for i in range(len(scores)):
             score = scores[i]
             print(f"{score:.2f}", end='\t')
