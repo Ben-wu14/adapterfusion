@@ -132,7 +132,7 @@ def heat_sta(path, tasks):
         with open(path+k+'/importance.pkl', 'rb') as f:
             data = pickle.load(f)
             for key in data:
-                avg_imp = data[key]['importance'].mean(dim=-1).numpy()[1]*100
+                avg_imp = data[key]['importance'][1]*100
                 module, layer = key
                 if module == 'output':
                     task_imp[layer*2+1] = avg_imp
@@ -164,13 +164,13 @@ def imp_lines(path, tasks):
 
         with open(path+"/Origin/"+k+'/importance.pkl', 'rb') as f:
             data = pickle.load(f)
-            task_imp = np.array([data[key]['importance'].mean(dim=-1).numpy()[1]*100 for key in data])
+            task_imp = np.array([data[key]['importance'][1]*100 for key in data])
         ori_imp.append(task_imp.mean())
 
         
         with open(path+"/Layer/"+k+'/importance.pkl', 'rb') as f:
             data = pickle.load(f)
-            task_imp = np.array([data[key]['importance'].mean(dim=-1).numpy()[1]*100 for key in data])
+            task_imp = np.array([data[key]['importance'][1]*100 for key in data])
         lay_imp.append(task_imp.mean())
 
     x = np.arange(len(list(tasks.keys())))  # the label locations
