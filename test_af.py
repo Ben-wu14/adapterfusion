@@ -316,7 +316,7 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 if __name__ == '__main__':
     # af_adapters = ["mnli", "qqp",'mrpc', 'rte', 'sst2', 'qnli']
     # tasks = ['mrpc', 'rte', 'sst2',  'qnli','qqp', 'mnli']
-    pruning_strategy = PRUNING_STRATEGY.NONE
+    # pruning_strategy = PRUNING_STRATEGY.NONE
     
     # af_adapters = ["mnli", "qqp",'mrpc', 'qnli', 'rte', 'sst2']
     tasks = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli', 'mnli-mm']
@@ -326,5 +326,12 @@ if __name__ == '__main__':
         test(task, 
              af_adapters=[task],
              save_model_path='/tmp/', 
-             pruning_strategy = pruning_strategy,
+             pruning_strategy = PRUNING_STRATEGY.NONE,
+            )
+
+    for task in tasks:
+        test(task, 
+             af_adapters=[task],
+             save_model_path='/tmp/', 
+             pruning_strategy = PRUNING_STRATEGY.LAYER,
             )
