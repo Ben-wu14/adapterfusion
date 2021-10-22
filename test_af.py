@@ -2,11 +2,16 @@ from datasets import load_from_disk, load_metric
 from transformers import AutoTokenizer, AutoModelWithHeads, TrainingArguments, Trainer, EvalPrediction
 from transformers.adapters.composition import Fuse
 from collections import defaultdict
-from tqdm import tqdm
 import numpy as np
 import torch
 import pickle
+import os
 
+class PRUNING_STRATEGY:
+    LAYER = 'Layer'
+    WEIGHT = 'Weight'
+    NUERON = 'Neuron'
+    NONE = 'Origin'
 
 
 def get_encode_batch(tokenizer, sentence1_key, sentence2_key):
@@ -28,15 +33,15 @@ def load_leave_out(loc_lst):
         
     return mh_leave_out, out_leave_out
 
-def load_adapters(directory, af_adapters, model, drop_layer = False):
+def load_adapters(directory, af_adapters, model, drop_layer = False, with_head = False):
     for task in af_adapters:
         if not drop_layer:
-            model.load_adapter(directory+'/'+task, with_head=False, overwrite_ok=True)
+            model.load_adapter(directory+'/'+task, with_head=with_head, overwrite_ok=True)
         else:
             with open('adapter_param/pruned/loc_lst/'+task+'_loc_lst.pkl', 'rb') as f:
                     loc_lst = pickle.load(f)
             mh_leave_out, out_leave_out = load_leave_out(loc_lst)
-            model.load_adapter(directory+'/'+task, with_head=False, overwrite_ok=True, mh_leave_out=mh_leave_out, out_leave_out=out_leave_out)
+            model.load_adapter(directory+'/'+task, with_head=with_head, overwrite_ok=True, mh_leave_out=mh_leave_out, out_leave_out=out_leave_out)
 
 
 def get_compute_metrics(metric, task):
@@ -49,14 +54,18 @@ def get_compute_metrics(metric, task):
         return metric.compute(predictions=predictions, references=labels)
     return compute_metrics
 
-def importance(dic):
-    # values * scores
-    values = dic['values']
-    scores = dic['scores']
+def importance(dic, af=True):
+    
     origin_out = dic['origin_out']
     combined = dic['combined']
 
-    adapters_output = torch.unsqueeze(scores, dim=3) * values
+    if af:
+        # values * scores
+        values = dic['values']
+        scores = dic['scores']
+        adapters_output = torch.unsqueeze(scores, dim=3) * values
+    else:
+        adapters_output = torch.unsqueeze(dic['adapter_out'], dim=2)
 
     origin_out = torch.unsqueeze(origin_out, dim=2)
     combined = torch.unsqueeze(combined, dim=3)
@@ -69,49 +78,60 @@ def importance(dic):
     adapter_dot_product = torch.squeeze(adapter_dot_product, dim=3)
     origin_dot_product = torch.squeeze(origin_dot_product, dim=3)
 
-
     # importance
     dot_products = torch.cat((origin_dot_product, adapter_dot_product), dim=-1)
     projection_percent = dot_products/ torch.sum(combined**2, dim=2)
     
     return projection_percent.mean(dim=(0,1)).cpu()
 
-def get_af_in_out(name, layer, connections, imp_dict):
-    def af_hook(self, input, output):
+def get_in_out(name, layer, connections, imp_dict, is_af):
+    def ori_hook(self, input, output):
         origin_out = input[-1].data.detach()
-        combined = output.data.detach()
+        combined = output.data.detach() if is_af else output[0].data.detach() 
         connections[(name, layer)]['origin_out'] = origin_out 
         connections[(name, layer)]['combined'] = combined
         if 'importance' not in imp_dict[(name, layer)]:
-            imp_dict[(name, layer)]['importance'] = importance(connections[(name, layer)]).unsqueeze(dim=-1)
+            imp_dict[(name, layer)]['importance'] = importance(connections[(name, layer)], af=is_af).unsqueeze(dim=-1)
         else:
-            imp_dict[(name, layer)]['importance'] = torch.cat((imp_dict[(name, layer)]['importance'], importance(connections[(name, layer)]).unsqueeze(dim=-1)), dim=-1)
-    return af_hook
+            imp_dict[(name, layer)]['importance'] = torch.cat((imp_dict[(name, layer)]['importance'], importance(connections[(name, layer)], af=is_af).unsqueeze(dim=-1)), dim=-1)
+    return ori_hook
 
 def get_output(name, layer, variable, connections):
     def output_hook(self, input, output):
         connections[(name, layer)][variable] = output.data.detach()
     return output_hook
 
-def add_register(module, name, layer, connections, imp_dict):
+def add_register(module, name, layer, connections, imp_dict, af=True):
     module_dict = module.adapter_fusion_layer
     handle = []
-    if len(module_dict.keys())!=0:
+    if af and len(list(module_dict.keys())):
         adapters = list(module.adapters.keys())
-        connections[(name, layer)]['adapter_names'] = adapters
         imp_dict[(name, layer)]['adapter_names'] = adapters
         af_module = module_dict[list(module_dict.keys())[0]]
 
         handle_scores  = af_module.softmax.register_forward_hook(get_output(name, layer, 'scores', connections))
         handle_values  = af_module.value.register_forward_hook(get_output(name, layer, 'values', connections))
-        handle_af  = af_module.register_forward_hook(get_af_in_out(name, layer, connections, imp_dict))
+        handle_af  = af_module.register_forward_hook(get_in_out(name, layer, connections, imp_dict, is_af = True))
 
         handle = [handle_scores, handle_values, handle_af]
+
+    elif len(module.adapters.keys())!=0:
+        adapters = list(module.adapters.keys())
+        imp_dict[(name, layer)]['adapter_names'] = adapters
+        adapter_module = module.adapters[adapters[0]]
+        handle_adapter = adapter_module.adapter_up.register_forward_hook(get_output(name, layer, 'adapter_out', connections))
+        handle_ori = adapter_module.register_forward_hook(get_in_out(name, layer, connections, imp_dict, is_af = False))
+
+        handle = [handle_adapter, handle_ori]
 
     return handle
 
 
-def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',model_checkpoint = '../Code/bert2', use_prune_adapter = True):
+def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',model_checkpoint = '../Code/bert2', pruning_strategy = PRUNING_STRATEGY.NONE):
+
+    is_af = len(af_adapters)!=1
+    use_prune_adapter = pruning_strategy!=PRUNING_STRATEGY.NONE
+
     print(f"Start training {task}, with adapters {af_adapters}")
     print(f'Model saved in {save_model_path}')
     if use_prune_adapter:
@@ -165,19 +185,19 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     num_labels = 3 if task.startswith("mnli") else 1 if task=="stsb" else 2
 
     model = AutoModelWithHeads.from_pretrained(model_checkpoint)
-    save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
-    load_adapters(save_adapters_path, af_adapters, model, drop_layer = use_prune_adapter)
-
-    # Add a fusion layer for all loaded adapters
-    model.add_adapter_fusion(Fuse(*af_adapters))
     # Add a classification head for our target task
-    model.add_classification_head(task, num_labels=num_labels)
+    model.add_classification_head(task, num_labels=num_labels, layers=1, overwrite_ok=True, use_pooler=True)
+    save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
+    load_adapters(save_adapters_path, af_adapters, model, drop_layer = use_prune_adapter, with_head = not is_af)
 
-
-
-    adapter_setup = Fuse(*af_adapters)
-    model.train_adapter_fusion(adapter_setup)
-    model.set_active_adapters(Fuse(*af_adapters))
+    if is_af:
+        # Add a fusion layer for all loaded adapters
+        model.add_adapter_fusion(Fuse(*af_adapters))
+        adapter_setup = Fuse(*af_adapters)
+        model.train_adapter_fusion(adapter_setup)
+        model.set_active_adapters(Fuse(*af_adapters))
+    else:
+        model.set_active_adapters(task)
 
     print('Model finished setup')
 
@@ -213,7 +233,7 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
     print('Constructed trainer, start training')
 
-    trainer.train()
+    # trainer.train()
 
     print('Training finished, Adding forward hooks to check connections')
     connections = defaultdict(dict)
@@ -223,16 +243,26 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
     handles = []
     for i in range(12):
-        handle_att = add_register(trainer.model.bert.encoder.layer[i].attention.output,'attention', i, connections, imp_dict)
-        handle_out = add_register(trainer.model.bert.encoder.layer[i].output,'output', i, connections, imp_dict)
+        handle_att = add_register(trainer.model.bert.encoder.layer[i].attention.output,'attention', i, connections, imp_dict, is_af)
+        handle_out = add_register(trainer.model.bert.encoder.layer[i].output,'output', i, connections, imp_dict, is_af)
         handles.extend(handle_att)
         handles.extend(handle_out)
 
 
     eval_result = trainer.evaluate()
     print(eval_result)
+
+
+    result_path = './results/'
+    result_path += 'AF/' if is_af else 'ST-A/'
+    result_path += pruning_strategy+'/'
+    result_path += task
+    if not os.path.exists(result_path):
+        os.mkdir(result_path)
+
+
     # Write eval_result to file
-    with open(save_model_path+task+'/eval_result.pkl', 'wb') as f:
+    with open(result_path+'/eval_result.pkl', 'wb') as f:
         pickle.dump(eval_result, f)
 
 
@@ -261,7 +291,8 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
 
     # Write importance to file
-    with open(save_model_path+task+'/importance.pkl', 'wb') as f:
+
+    with open(result_path + '/importance.pkl', 'wb') as f:
         pickle.dump(imp_dict, f)
 
     print('Finished evaluation, removing hooks')
@@ -278,8 +309,15 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 if __name__ == '__main__':
     # af_adapters = ["mnli", "qqp",'mrpc', 'rte', 'sst2', 'qnli']
     # tasks = ['mrpc', 'rte', 'sst2',  'qnli','qqp', 'mnli']
-    af_adapters = ["mnli", "qqp",'mrpc', 'qnli','rte', 'sst2']
-    tasks = ['mrpc','rte', 'sst2']
+    pruning_strategy = PRUNING_STRATEGY.NONE
+    
+    # af_adapters = ["mnli", "qqp",'mrpc', 'qnli', 'rte', 'sst2']
+    tasks = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli', 'mnli-mm']
+    # tasks = ['cola']
 
     for task in tasks:
-        test(task, af_adapters, save_model_path='/tmp/', use_prune_adapter=True)
+        test(task, 
+             af_adapters=[task],
+             save_model_path='/tmp/', 
+             pruning_strategy = pruning_strategy,
+            )
