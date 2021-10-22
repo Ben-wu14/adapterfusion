@@ -254,8 +254,9 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     print(eval_result)
 
     dataiter = iter(trainer.get_train_dataloader())
+    dataset_limit = 3000
     with torch.no_grad():
-        for data_item in tqdm(dataiter):
+        for i, data_item in tqdm(zip(range(dataset_limit), dataiter), total=dataset_limit):
             model(data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
 
 
