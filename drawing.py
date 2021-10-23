@@ -156,7 +156,7 @@ def heat_sta(path, tasks):
     plt.show()
 
 
-def imp_lines(path, tasks):
+def bars_sta(path, tasks):
     path += '/' if not path.endswith('/') else ""
     ori_imp = []
     lay_imp = []
@@ -180,8 +180,8 @@ def imp_lines(path, tasks):
     rects1 = ax.bar(x - width/2, ori_imp, width, label='Origin model')
     rects2 = ax.bar(x + width/2, lay_imp, width, label='Layer model')
 
-    ax.bar_label(rects1, padding=3)
-    ax.bar_label(rects2, padding=3)
+    ax.bar_label(rects1, padding=3, fmt='%.1f')
+    ax.bar_label(rects2, padding=3, fmt='%.1f')
 
     ax.set_xticks(x)
     ax.set_xticklabels(list(tasks.keys()))
@@ -206,4 +206,5 @@ tasks = {
         'rte':2.5,
     }
 tasks = {k:v for k,v in sorted(tasks.items(), key=lambda item: item[1])}
-path = 'results/ST-A'
+path = 'results/ST-A/Origin'
+bars_sta(path, tasks)
