@@ -22,6 +22,7 @@ def transfer_adapter(filePath, task, drop_layer = True):
 
     new_adapter = {}
     loc_lst = [[False, False] for _ in range(12)]
+    leave_out_tuple = (None, None)
 
     for name, item in adapter.items():
         new_adapter[key_transfer(name, task)] = item
@@ -33,15 +34,20 @@ def transfer_adapter(filePath, task, drop_layer = True):
                 layer_id = name[(name.index('layer.')+ len('layer.')) : name.index('.output')]
                 loc_lst[int(layer_id)][1] = True
     if drop_layer:
-        with open('adapter_param/pruned/loc_lst/'+task+'_loc_lst.pkl','wb') as f:
-            pickle.dump(loc_lst, f)
+        mh_leave_out, out_leave_out = [], []
+        for i in range(12):
+            if not loc_lst[i][0]:
+                mh_leave_out.append(i)
+            if not loc_lst[i][1]:
+                out_leave_out.append(i)
+        leave_out_tuple = (mh_leave_out, out_leave_out)
 
     af_adapter_path = filePath.split('/')[-1].split('.')[0]
     af_adapter_path = 'adapter_param/base/'+af_adapter_path if not drop_layer else 'adapter_param/pruned/adapter/'+af_adapter_path
 
     with open(af_adapter_path+ '_AF.pkl', 'wb') as f:
         pickle.dump(new_adapter, f)
-    return loc_lst, new_adapter
+    return leave_out_tuple, new_adapter
 
 tasks = ['cola','mnli-mm', 'stsb', 'sst2', 'rte', 'mnli', 'qnli', 'qqp', 'mrpc']
 
@@ -93,31 +99,11 @@ for task in tasks:
     # Encode the input data
     dataset = obtain_data.map(encode_batch, batched=True)
 
-
-    # id2label = {id: label for (id, label) in enumerate(dataset["train"].features['label'].names)}
-
-
-
-    # config = BertConfig.from_pretrained(
-    #     model_checkpoint,
-    #     id2label = id2label,
-    # )
     num_labels = 3 if task.startswith("mnli") else 1 if task=="stsb" else 2
 
     model = BertModelWithHeads.from_pretrained(
         model_checkpoint,
     )
-
-
-    qnli_config = HoulsbyConfig(non_linearity='gelu_orig', reduction_factor=6, adapter_residual_before_ln=True, )
-    model.add_adapter(task,config=qnli_config, overwrite_ok=True)
-    model.train_adapter(task)
-
-    
-    model.add_classification_head(task, num_labels=num_labels, layers=1, overwrite_ok=True, use_pooler=True)
-    model.set_active_adapters(task)
-
-    
 
     task_to_path = {
         'qnli':'qnli_iter4_adapter.pkl',
@@ -144,23 +130,21 @@ for task in tasks:
 
     custom_adapter_path = task_to_path if use_prune_adapter else task_to_base_path
 
-    print('Using path:\n', custom_adapter_path)
+    leave_out_tuple, new_adapter = transfer_adapter( 'ben_adapter/'+custom_adapter_path[task], task, drop_layer = use_prune_adapter)
+    mh_leave_out, out_leave_out = leave_out_tuple
 
+    qnli_config = HoulsbyConfig(non_linearity='gelu_orig', reduction_factor=6, adapter_residual_before_ln=True, mh_leave_out=mh_leave_out, out_leave_out=out_leave_out)
+    model.add_adapter(task,config=qnli_config, overwrite_ok=True)
+    model.train_adapter(task)
 
     
-
-    loc_lst, new_adapter = transfer_adapter( 'ben_adapter/'+custom_adapter_path[task], task, drop_layer = use_prune_adapter)
+    model.add_classification_head(task, num_labels=num_labels, layers=1, overwrite_ok=True, use_pooler=True)
+    model.set_active_adapters(task)
 
     notLoadParam, unkownParam = model.load_state_dict(new_adapter, strict=False)
 
     print("Unknown Param",unkownParam)
     
-    if use_prune_adapter:
-        for i in range(12):
-            if not loc_lst[i][0]:
-                model.bert.encoder.layer[i].attention.output.adapters.clear()
-            if not loc_lst[i][1]:
-                model.bert.encoder.layer[i].output.adapters.clear()
 
     metric_name = "pearson" if task == "stsb" else "matthews_correlation" if task == "cola" else "accuracy"
     validation_key = "validation_mismatched" if task == "mnli-mm" else "validation_matched" if task == "mnli" else "validation"
@@ -195,7 +179,6 @@ for task in tasks:
         compute_metrics = compute_metrics,
 
     )
-
     print(task, metric_name, trainer.evaluate()['eval_'+metric_name])
 
     save_path = 'adapters_for_af' if use_prune_adapter else 'adapters_for_af_base'

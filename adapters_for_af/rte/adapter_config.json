@@ -8,14 +8,29 @@
     "ln_after": false,
     "ln_before": false,
     "mh_adapter": true,
+    "mh_leave_out": [
+      11,
+      1,
+      2,
+      10
+    ],
     "non_linearity": "gelu_orig",
     "original_ln_after": true,
     "original_ln_before": false,
+    "out_leave_out": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      11
+    ],
     "output_adapter": true,
     "reduction_factor": 6,
     "residual_before_ln": true
   },
-  "config_id": "49531d02f4cd3e2e",
+  "config_id": "a2c3443cef777ba4",
   "hidden_size": 768,
   "model_class": "BertModelWithHeads",
   "model_name": null,

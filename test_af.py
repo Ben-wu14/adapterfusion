@@ -24,25 +24,9 @@ def get_encode_batch(tokenizer, sentence1_key, sentence2_key):
     return encode_batch
 
 
-def load_leave_out(loc_lst):
-    mh_leave_out, out_leave_out = [], []
-    for i in range(12):
-        if not loc_lst[i][0]:
-            mh_leave_out.append(i)
-        if not loc_lst[i][1]:
-            out_leave_out.append(i)
-        
-    return mh_leave_out, out_leave_out
-
-def load_adapters(directory, af_adapters, model, drop_layer = False, with_head = False):
+def load_adapters(directory, af_adapters, model, with_head = False):
     for task in af_adapters:
-        if not drop_layer:
-            model.load_adapter(directory+'/'+task, with_head=with_head, overwrite_ok=True)
-        else:
-            with open('adapter_param/pruned/loc_lst/'+task+'_loc_lst.pkl', 'rb') as f:
-                    loc_lst = pickle.load(f)
-            mh_leave_out, out_leave_out = load_leave_out(loc_lst)
-            model.load_adapter(directory+'/'+task, with_head=with_head, overwrite_ok=True, mh_leave_out=mh_leave_out, out_leave_out=out_leave_out)
+        model.load_adapter(directory+'/'+task, with_head=with_head, overwrite_ok=True)
 
 
 def get_compute_metrics(metric, task):
@@ -188,8 +172,9 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     model = AutoModelWithHeads.from_pretrained(model_checkpoint)
     # Add a classification head for our target task
     model.add_classification_head(task, num_labels=num_labels, layers=1, overwrite_ok=True, use_pooler=True)
-    save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
-    load_adapters(save_adapters_path, af_adapters, model, drop_layer = use_prune_adapter, with_head = not is_af)
+    # save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
+    save_adapters_path = 'test_saving'
+    load_adapters(save_adapters_path, af_adapters, model, with_head = not is_af)
 
     if is_af:
         # Add a fusion layer for all loaded adapters
