@@ -121,6 +121,8 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     print(f'Model saved in {save_model_path}')
     if use_prune_adapter:
         print("Using LTH model in AF")
+    if is_af:
+        print("Using Adapter fusion")
         
     if not save_model_path.endswith('/'):
         save_model_path = save_model_path + '/'
@@ -172,12 +174,12 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     model = AutoModelWithHeads.from_pretrained(model_checkpoint)
     # Add a classification head for our target task
     model.add_classification_head(task, num_labels=num_labels, layers=1, overwrite_ok=True, use_pooler=True)
-    # save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
-    save_adapters_path = 'test_saving'
+    save_adapters_path = 'adapters_for_af'if use_prune_adapter else 'adapters_for_af_base'
     load_adapters(save_adapters_path, af_adapters, model, with_head = not is_af)
 
     if is_af:
         # Add a fusion layer for all loaded adapters
+        print("Loading adapterfusion layer")
         model.add_adapter_fusion(Fuse(*af_adapters))
         adapter_setup = Fuse(*af_adapters)
         model.train_adapter_fusion(adapter_setup)
@@ -189,13 +191,14 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
     metric_name = "pearson" if task == "stsb" else "matthews_correlation" if task == "cola" else "accuracy"
     validation_key = "validation_mismatched" if task == "mnli-mm" else "validation_matched" if task == "mnli" else "validation"
+    batch_size = 32 if task!='mnli' and task!='mnli-mm' and task!='qnli'and task!='rte' else 16
 
     training_args = TrainingArguments(
         learning_rate = 2e-5,
         num_train_epochs=4,
-        per_device_train_batch_size=32,
-        per_device_eval_batch_size=32,
-        logging_steps=50,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        # logging_steps=50,
         output_dir= save_model_path+task,
         overwrite_output_dir=True,
         remove_unused_columns=True,
@@ -219,7 +222,7 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
     print('Constructed trainer, start training')
 
-    # trainer.train()
+    trainer.train()
 
     print('Training finished, Adding forward hooks to check connections')
     connections = defaultdict(dict)
@@ -238,8 +241,9 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     eval_result = trainer.evaluate()
     print(eval_result)
 
-    dataiter = iter(trainer.get_train_dataloader())
-    dataset_limit = 3000
+    data_loader = trainer.get_train_dataloader()
+    dataiter = iter(data_loader)
+    dataset_limit = min(len(data_loader.dataset), 3000)
     with torch.no_grad():
         for i, data_item in tqdm(zip(range(dataset_limit), dataiter), total=dataset_limit):
             model(data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
@@ -300,24 +304,24 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
 
 if __name__ == '__main__':
-    # af_adapters = ["mnli", "qqp",'mrpc', 'rte', 'sst2', 'qnli']
+    af_adapters = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli']
     # tasks = ['mrpc', 'rte', 'sst2',  'qnli','qqp', 'mnli']
     # pruning_strategy = PRUNING_STRATEGY.NONE
     
     # af_adapters = ["mnli", "qqp",'mrpc', 'qnli', 'rte', 'sst2']
-    tasks = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli', 'mnli-mm']
-    # tasks = ['cola']
+    # tasks = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli', 'mnli-mm']
+    tasks = [ 'cola','rte','mrpc', 'stsb', 'sst2']
 
     for task in tasks:
         test(task, 
-             af_adapters=[task],
-             save_model_path='/tmp/', 
-             pruning_strategy = PRUNING_STRATEGY.NONE,
-            )
-
-    for task in tasks:
-        test(task, 
-             af_adapters=[task],
+             af_adapters = af_adapters,
              save_model_path='/tmp/', 
              pruning_strategy = PRUNING_STRATEGY.LAYER,
             )
+
+    # for task in tasks:
+    #     test(task, 
+    #          af_adapters=[task],
+    #          save_model_path='/tmp/', 
+    #          pruning_strategy = PRUNING_STRATEGY.LAYER,
+    #         )
