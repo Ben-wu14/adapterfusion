@@ -7,6 +7,9 @@ import numpy as np
 import torch
 import pickle
 import os
+# import wandb
+from fvcore.nn import FlopCountAnalysis, flop_count_table
+os.environ["WANDB_DISABLED"] = "true"
 
 class PRUNING_STRATEGY:
     LAYER = 'Layer'
@@ -194,7 +197,7 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
     batch_size = 32 if task!='mnli' and task!='mnli-mm' and task!='qnli'and task!='rte' else 16
 
     training_args = TrainingArguments(
-        learning_rate = 2e-5,
+        learning_rate = 5e-5,
         num_train_epochs=4,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
@@ -206,6 +209,8 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
         save_strategy='epoch',
         metric_for_best_model=metric_name,
         load_best_model_at_end=True,
+        # report_to="wandb",  # enable logging to W&B 
+        # run_name="bert-base-high-lr"  # name of the W&B run (optional)
     )
 
 
@@ -222,106 +227,120 @@ def test(task, af_adapters, is_super_glue = False ,save_model_path = '/tmp/',mod
 
     print('Constructed trainer, start training')
 
-    trainer.train()
+    # trainer.train()
 
-    print('Training finished, Adding forward hooks to check connections')
-    connections = defaultdict(dict)
-    imp_dict = defaultdict(dict)
+    # print('Training finished, Adding forward hooks to check connections')
+    # connections = defaultdict(dict)
+    # imp_dict = defaultdict(dict)
 
 
 
-    handles = []
-    for i in range(12):
-        handle_att = add_register(trainer.model.bert.encoder.layer[i].attention.output,'attention', i, connections, imp_dict, is_af)
-        handle_out = add_register(trainer.model.bert.encoder.layer[i].output,'output', i, connections, imp_dict, is_af)
-        handles.extend(handle_att)
-        handles.extend(handle_out)
+    # handles = []
+    # for i in range(12):
+    #     handle_att = add_register(trainer.model.bert.encoder.layer[i].attention.output,'attention', i, connections, imp_dict, is_af)
+    #     handle_out = add_register(trainer.model.bert.encoder.layer[i].output,'output', i, connections, imp_dict, is_af)
+    #     handles.extend(handle_att)
+    #     handles.extend(handle_out)
 
 
     eval_result = trainer.evaluate()
     print(eval_result)
 
+    # data_loader = trainer.get_train_dataloader()
+    # dataiter = iter(data_loader)
+    # dataset_limit = min(len(data_loader.dataset)//batch_size, 3000)
+    # with torch.no_grad():
+    #     for i, data_item in tqdm(zip(range(dataset_limit), dataiter), total=dataset_limit):
+    #         model(data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
+
+
+    # result_path = './results/'
+    # result_path += 'AF/' if is_af else 'ST-A/'
+    # result_path += pruning_strategy+'/'
+    # result_path += task
+    # if not os.path.exists(result_path):
+    #     os.mkdir(result_path)
+
+
+    # # Write eval_result to file
+    # with open(result_path+'/eval_result.pkl', 'wb') as f:
+    #     pickle.dump(eval_result, f)
+
+
+    # print("Finished checking")
+    # total_adapters = 0
+    # used_adapters = 0
+    # for k,v in imp_dict.items():
+    #     print(k)
+    #     print('Ori\t',end='')
+    #     for name in v['adapter_names']:
+    #         print(name, end='\t')
+    #     total_adapters += len(v['adapter_names'])
+
+    #     print()
+    #     scores = v['importance'].mean(dim=-1).numpy()
+    #     v['importance'] = scores
+    #     for i in range(len(scores)):
+    #         score = scores[i]
+    #         print(f"{score:.2f}", end='\t')
+    #         if score >= 0.01 and i!=0:
+    #             used_adapters += 1
+    #     print()
+
+    # if total_adapters!=0:
+    #     print("Total adapters",total_adapters, "Used adapters",used_adapters, "Used percent",used_adapters/ total_adapters)
+
+
+
+    # # Write importance to file
+
+    # with open(result_path + '/importance.pkl', 'wb') as f:
+    #     pickle.dump(imp_dict, f)
+
+    # print('Finished evaluation, removing hooks')
+    # for handle in handles:
+    #     handle.remove()
+
+    # print('hooks removed')
+
     data_loader = trainer.get_train_dataloader()
     dataiter = iter(data_loader)
-    dataset_limit = min(len(data_loader.dataset), 3000)
+    data_item = next(dataiter)
+    input = (data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
     with torch.no_grad():
-        for i, data_item in tqdm(zip(range(dataset_limit), dataiter), total=dataset_limit):
-            model(data_item['attention_mask'].to(model.device), data_item['input_ids'].to(model.device))
-
-
-    result_path = './results/'
-    result_path += 'AF/' if is_af else 'ST-A/'
-    result_path += pruning_strategy+'/'
-    result_path += task
-    if not os.path.exists(result_path):
-        os.mkdir(result_path)
-
-
-    # Write eval_result to file
-    with open(result_path+'/eval_result.pkl', 'wb') as f:
-        pickle.dump(eval_result, f)
-
-
-    print("Finished checking")
-    total_adapters = 0
-    used_adapters = 0
-    for k,v in imp_dict.items():
-        print(k)
-        print('Ori\t',end='')
-        for name in v['adapter_names']:
-            print(name, end='\t')
-        total_adapters += len(v['adapter_names'])
-
-        print()
-        scores = v['importance'].mean(dim=-1).numpy()
-        v['importance'] = scores
-        for i in range(len(scores)):
-            score = scores[i]
-            print(f"{score:.2f}", end='\t')
-            if score >= 0.01 and i!=0:
-                used_adapters += 1
-        print()
-
-    if total_adapters!=0:
-        print("Total adapters",total_adapters, "Used adapters",used_adapters, "Used percent",used_adapters/ total_adapters)
-
-
-
-    # Write importance to file
-
-    with open(result_path + '/importance.pkl', 'wb') as f:
-        pickle.dump(imp_dict, f)
-
-    print('Finished evaluation, removing hooks')
-    for handle in handles:
-        handle.remove()
-
-    print('hooks removed')
-
+        flops = FlopCountAnalysis(model, input)
+        print("Total flops",flops.total())
+        # print(flop_count_table(flops, max_depth=6, show_param_shapes=False))
 
 
     
 
 
 if __name__ == '__main__':
+    # wandb.init(project="AF_LTH", 
+    #     #    name="bert-base-high-lr",
+    #        tags=["8 Adapter", "AF", "LTH-Layer", "rte"],
+    #        group="LTH-AF")
+
     af_adapters = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli']
     # tasks = ['mrpc', 'rte', 'sst2',  'qnli','qqp', 'mnli']
     # pruning_strategy = PRUNING_STRATEGY.NONE
     
     # af_adapters = ["mnli", "qqp",'mrpc', 'qnli', 'rte', 'sst2']
     # tasks = ['cola', 'rte', 'sst2', 'mrpc', 'stsb', 'qnli', 'qqp', 'mnli', 'mnli-mm']
-    tasks = [ 'cola','rte','mrpc', 'stsb', 'sst2']
+    # tasks = [ 'cola','rte','mrpc', 'stsb', 'sst2']
+    tasks = ['mrpc']
 
     for task in tasks:
         test(task, 
              af_adapters = af_adapters,
              save_model_path='/tmp/', 
+             pruning_strategy = PRUNING_STRATEGY.NONE,
+            )
+    
+    for task in tasks:
+        test(task, 
+             af_adapters= af_adapters,
+             save_model_path='/tmp/', 
              pruning_strategy = PRUNING_STRATEGY.LAYER,
             )
-
-    # for task in tasks:
-    #     test(task, 
-    #          af_adapters=[task],
-    #          save_model_path='/tmp/', 
-    #          pruning_strategy = PRUNING_STRATEGY.LAYER,
-    #         )
